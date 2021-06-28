@@ -1,288 +1,294 @@
-Introduction
-This example shows how to do image classification from scratch, starting from JPEG image files on disk, without leveraging pre-trained weights or a pre-made Keras Application model. We demonstrate the workflow on the Kaggle Cats vs Dogs binary classification dataset.
+TensorFlow-Slim image classification model library
+This directory contains code for training and evaluating several widely used Convolutional Neural Network (CNN) image classification models using tf_slim. It contains scripts that allow you to train models from scratch or fine-tune them from pre-trained network weights. It also contains code for downloading standard image datasets, converting them to TensorFlow's native TFRecord format and reading them in using TF-Slim's data reading and queueing utilities. You can easily train any model on any of these datasets, as we demonstrate below. We've also included a jupyter notebook, which provides working examples of how to use TF-Slim for image classification. For developing or modifying your own models, see also the main TF-Slim page.
 
-We use the image_dataset_from_directory utility to generate the datasets, and we use Keras image preprocessing layers for image standardization and data augmentation.
+Contacts
+Maintainers of TF-slim:
 
-Setup
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
-Load the data: the Cats vs Dogs dataset
-Raw data download
-First, let's download the 786M ZIP archive of the raw data:
+Sergio Guadarrama, github: sguada
+Citation
+"TensorFlow-Slim image classification model library" N. Silberman and S. Guadarrama, 2016. https://github.com/tensorflow/models/tree/master/research/slim
 
-!curl -O https://download.microsoft.com/download/3/E/1/3E1C3F21-ECDB-4869-8368-6DEBA77B919F/kagglecatsanddogs_3367a.zip
-!unzip -q kagglecatsanddogs_3367a.zip
-!ls
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
-100  786M  100  786M    0     0  44.4M      0  0:00:17  0:00:17 --:--:-- 49.6M
+Table of contents
+Installation and setup
+Preparing the datasets
+Using pre-trained models
+Training from scratch
+Fine tuning to a new task
+Evaluating performance
+Exporting Inference Graph
+Troubleshooting
 
-image_classification_from_scratch.ipynb  MSR-LA - 3467.docx  readme[1].txt
-kagglecatsanddogs_3367a.zip      PetImages
-Now we have a PetImages folder which contain two subfolders, Cat and Dog. Each subfolder contains image files for each category.
+Installation
 
-!ls PetImages
-Cat  Dog
-Filter out corrupted images
-When working with lots of real-world image data, corrupted images are a common occurence. Let's filter out badly-encoded images that do not feature the string "JFIF" in their header.
+In this section, we describe the steps required to install the appropriate prerequisite packages.
 
-import os
+Installing latest version of TF-slim
+TF-Slim is available as tf_slim package. To test that your installation is working, execute the following command; it should run without raising any errors.
 
-num_skipped = 0
-for folder_name in ("Cat", "Dog"):
-    folder_path = os.path.join("PetImages", folder_name)
-    for fname in os.listdir(folder_path):
-        fpath = os.path.join(folder_path, fname)
-        try:
-            fobj = open(fpath, "rb")
-            is_jfif = tf.compat.as_bytes("JFIF") in fobj.peek(10)
-        finally:
-            fobj.close()
+python -c "import tf_slim as slim; eval = slim.evaluation.evaluate_once"
+Installing the TF-slim image models library
+To use TF-Slim for image classification, you also have to install the TF-Slim image models library, which is not part of the core TF library. To do this, check out the tensorflow/models repository as follows:
 
-        if not is_jfif:
-            num_skipped += 1
-            # Delete corrupted image
-            os.remove(fpath)
+cd $HOME/workspace
+git clone https://github.com/tensorflow/models/
+This will put the TF-Slim image models library in $HOME/workspace/models/research/slim. (It will also create a directory called models/inception, which contains an older version of slim; you can safely ignore this.)
 
-print("Deleted %d images" % num_skipped)
-Deleted 1590 images
-Generate a Dataset
-image_size = (180, 180)
-batch_size = 32
+To verify that this has worked, execute the following commands; it should run without raising any errors.
 
-train_ds = tf.keras.preprocessing.image_dataset_from_directory(
-    "PetImages",
-    validation_split=0.2,
-    subset="training",
-    seed=1337,
-    image_size=image_size,
-    batch_size=batch_size,
-)
-val_ds = tf.keras.preprocessing.image_dataset_from_directory(
-    "PetImages",
-    validation_split=0.2,
-    subset="validation",
-    seed=1337,
-    image_size=image_size,
-    batch_size=batch_size,
-)
-Found 23410 files belonging to 2 classes.
-Using 18728 files for training.
-Found 23410 files belonging to 2 classes.
-Using 4682 files for validation.
-Visualize the data
-Here are the first 9 images in the training dataset. As you can see, label 1 is "dog" and label 0 is "cat".
+cd $HOME/workspace/models/research/slim
+python -c "from nets import cifarnet; mynet = cifarnet.cifarnet"
+Preparing the datasets
 
-import matplotlib.pyplot as plt
+As part of this library, we've included scripts to download several popular image datasets (listed below) and convert them to slim format.
 
-plt.figure(figsize=(10, 10))
-for images, labels in train_ds.take(1):
-    for i in range(9):
-        ax = plt.subplot(3, 3, i + 1)
-        plt.imshow(images[i].numpy().astype("uint8"))
-        plt.title(int(labels[i]))
-        plt.axis("off")
-png
+Dataset	Training Set Size	Testing Set Size	Number of Classes	Comments
+Flowers	2500	2500	5	Various sizes (source: Flickr)
+Cifar10	60k	10k	10	32x32 color
+MNIST	60k	10k	10	28x28 gray
+ImageNet	1.2M	50k	1000	Various sizes
+VisualWakeWords	82783	40504	2	Various sizes (source: MS COCO)
+Downloading and converting to TFRecord format
+For each dataset, we'll need to download the raw data and convert it to TensorFlow's native TFRecord format. Each TFRecord contains a TF-Example protocol buffer. Below we demonstrate how to do this for the Flowers dataset.
 
-Using image data augmentation
-When you don't have a large image dataset, it's a good practice to artificially introduce sample diversity by applying random yet realistic transformations to the training images, such as random horizontal flipping or small random rotations. This helps expose the model to different aspects of the training data while slowing down overfitting.
+$ DATA_DIR=/tmp/data/flowers
+$ python download_and_convert_data.py \
+    --dataset_name=flowers \
+    --dataset_dir="${DATA_DIR}"
+When the script finishes you will find several TFRecord files created:
 
-data_augmentation = keras.Sequential(
-    [
-        layers.experimental.preprocessing.RandomFlip("horizontal"),
-        layers.experimental.preprocessing.RandomRotation(0.1),
-    ]
-)
-Let's visualize what the augmented samples look like, by applying data_augmentation repeatedly to the first image in the dataset:
+$ ls ${DATA_DIR}
+flowers_train-00000-of-00005.tfrecord
+...
+flowers_train-00004-of-00005.tfrecord
+flowers_validation-00000-of-00005.tfrecord
+...
+flowers_validation-00004-of-00005.tfrecord
+labels.txt
+These represent the training and validation data, sharded over 5 files each. You will also find the $DATA_DIR/labels.txt file which contains the mapping from integer labels to class names.
 
-plt.figure(figsize=(10, 10))
-for images, _ in train_ds.take(1):
-    for i in range(9):
-        augmented_images = data_augmentation(images)
-        ax = plt.subplot(3, 3, i + 1)
-        plt.imshow(augmented_images[0].numpy().astype("uint8"))
-        plt.axis("off")
-png
+You can use the same script to create the mnist, cifar10 and visualwakewords datasets. However, for ImageNet, you have to follow the instructions here. Note that you first have to sign up for an account at image-net.org. Also, the download can take several hours, and could use up to 500GB.
 
-Standardizing the data
-Our image are already in a standard size (180x180), as they are being yielded as contiguous float32 batches by our dataset. However, their RGB channel values are in the [0, 255] range. This is not ideal for a neural network; in general you should seek to make your input values small. Here, we will standardize values to be in the [0, 1] by using a Rescaling layer at the start of our model.
+Creating a TF-Slim Dataset Descriptor.
+Once the TFRecord files have been created, you can easily define a Slim Dataset, which stores pointers to the data file, as well as various other pieces of metadata, such as the class labels, the train/test split, and how to parse the TFExample protos. We have included the TF-Slim Dataset descriptors for Flowers, Cifar10, MNIST, ImageNet and VisualWakeWords, An example of how to load data using a TF-Slim dataset descriptor using a TF-Slim DatasetDataProvider is found below:
 
-Two options to preprocess the data
-There are two ways you could be using the data_augmentation preprocessor:
-
-Option 1: Make it part of the model, like this:
-
-inputs = keras.Input(shape=input_shape)
-x = data_augmentation(inputs)
-x = layers.experimental.preprocessing.Rescaling(1./255)(x)
-...  # Rest of the model
-With this option, your data augmentation will happen on device, synchronously with the rest of the model execution, meaning that it will benefit from GPU acceleration.
-
-Note that data augmentation is inactive at test time, so the input samples will only be augmented during fit(), not when calling evaluate() or predict().
-
-If you're training on GPU, this is the better option.
-
-Option 2: apply it to the dataset, so as to obtain a dataset that yields batches of augmented images, like this:
-
-augmented_train_ds = train_ds.map(
-  lambda x, y: (data_augmentation(x, training=True), y))
-With this option, your data augmentation will happen on CPU, asynchronously, and will be buffered before going into the model.
-
-If you're training on CPU, this is the better option, since it makes data augmentation asynchronous and non-blocking.
-
-In our case, we'll go with the first option.
-
-Configure the dataset for performance
-Let's make sure to use buffered prefetching so we can yield data from disk without having I/O becoming blocking:
-
-train_ds = train_ds.prefetch(buffer_size=32)
-val_ds = val_ds.prefetch(buffer_size=32)
-Build a model
-We'll build a small version of the Xception network. We haven't particularly tried to optimize the architecture; if you want to do a systematic search for the best model configuration, consider using Keras Tuner.
-
-Note that:
-
-We start the model with the data_augmentation preprocessor, followed by a Rescaling layer.
-We include a Dropout layer before the final classification layer.
-def make_model(input_shape, num_classes):
-    inputs = keras.Input(shape=input_shape)
-    # Image augmentation block
-    x = data_augmentation(inputs)
-
-    # Entry block
-    x = layers.experimental.preprocessing.Rescaling(1.0 / 255)(x)
-    x = layers.Conv2D(32, 3, strides=2, padding="same")(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.Activation("relu")(x)
-
-    x = layers.Conv2D(64, 3, padding="same")(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.Activation("relu")(x)
-
-    previous_block_activation = x  # Set aside residual
-
-    for size in [128, 256, 512, 728]:
-        x = layers.Activation("relu")(x)
-        x = layers.SeparableConv2D(size, 3, padding="same")(x)
-        x = layers.BatchNormalization()(x)
-
-        x = layers.Activation("relu")(x)
-        x = layers.SeparableConv2D(size, 3, padding="same")(x)
-        x = layers.BatchNormalization()(x)
-
-        x = layers.MaxPooling2D(3, strides=2, padding="same")(x)
-
-        # Project residual
-        residual = layers.Conv2D(size, 1, strides=2, padding="same")(
-            previous_block_activation
-        )
-        x = layers.add([x, residual])  # Add back residual
-        previous_block_activation = x  # Set aside next residual
-
-    x = layers.SeparableConv2D(1024, 3, padding="same")(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.Activation("relu")(x)
-
-    x = layers.GlobalAveragePooling2D()(x)
-    if num_classes == 2:
-        activation = "sigmoid"
-        units = 1
-    else:
-        activation = "softmax"
-        units = num_classes
-
-    x = layers.Dropout(0.5)(x)
-    outputs = layers.Dense(units, activation=activation)(x)
-    return keras.Model(inputs, outputs)
+import tensorflow.compat.v1 as tf
+import tf_slim as slim
+from datasets import flowers
 
 
-model = make_model(input_shape=image_size + (3,), num_classes=2)
-keras.utils.plot_model(model, show_shapes=True)
-('Failed to import pydot. You must `pip install pydot` and install graphviz (https://graphviz.gitlab.io/download/), ', 'for `pydotprint` to work.')
-Train the model
-epochs = 50
 
-callbacks = [
-    keras.callbacks.ModelCheckpoint("save_at_{epoch}.h5"),
-]
-model.compile(
-    optimizer=keras.optimizers.Adam(1e-3),
-    loss="binary_crossentropy",
-    metrics=["accuracy"],
-)
-model.fit(
-    train_ds, epochs=epochs, callbacks=callbacks, validation_data=val_ds,
-)
-Epoch 1/50
-586/586 [==============================] - 81s 139ms/step - loss: 0.6233 - accuracy: 0.6700 - val_loss: 0.7698 - val_accuracy: 0.6117
-Epoch 2/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.4638 - accuracy: 0.7840 - val_loss: 0.4056 - val_accuracy: 0.8178
-Epoch 3/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.3652 - accuracy: 0.8405 - val_loss: 0.3535 - val_accuracy: 0.8528
-Epoch 4/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.3112 - accuracy: 0.8675 - val_loss: 0.2673 - val_accuracy: 0.8894
-Epoch 5/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.2585 - accuracy: 0.8928 - val_loss: 0.6213 - val_accuracy: 0.7294
-Epoch 6/50
-586/586 [==============================] - 81s 138ms/step - loss: 0.2218 - accuracy: 0.9071 - val_loss: 0.2377 - val_accuracy: 0.8930
-Epoch 7/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1992 - accuracy: 0.9169 - val_loss: 1.1273 - val_accuracy: 0.6254
-Epoch 8/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1820 - accuracy: 0.9243 - val_loss: 0.1955 - val_accuracy: 0.9173
-Epoch 9/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1694 - accuracy: 0.9308 - val_loss: 0.1602 - val_accuracy: 0.9314
-Epoch 10/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1623 - accuracy: 0.9333 - val_loss: 0.1777 - val_accuracy: 0.9248
-Epoch 11/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1522 - accuracy: 0.9365 - val_loss: 0.1562 - val_accuracy: 0.9400
-Epoch 12/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1458 - accuracy: 0.9417 - val_loss: 0.1529 - val_accuracy: 0.9338
-Epoch 13/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1368 - accuracy: 0.9433 - val_loss: 0.1694 - val_accuracy: 0.9259
-Epoch 14/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1301 - accuracy: 0.9461 - val_loss: 0.1250 - val_accuracy: 0.9530
-Epoch 15/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1261 - accuracy: 0.9483 - val_loss: 0.1548 - val_accuracy: 0.9353
-Epoch 16/50
-586/586 [==============================] - 81s 137ms/step - loss: 0.1241 - accuracy: 0.9497 - val_loss: 0.1376 - val_accuracy: 0.9464
-Epoch 17/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1193 - accuracy: 0.9535 - val_loss: 0.1093 - val_accuracy: 0.9575
-Epoch 18/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1107 - accuracy: 0.9558 - val_loss: 0.1488 - val_accuracy: 0.9432
-Epoch 19/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.1175 - accuracy: 0.9532 - val_loss: 0.1380 - val_accuracy: 0.9421
-Epoch 20/50
-586/586 [==============================] - 81s 138ms/step - loss: 0.1026 - accuracy: 0.9584 - val_loss: 0.1293 - val_accuracy: 0.9485
-Epoch 21/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.0977 - accuracy: 0.9606 - val_loss: 0.1105 - val_accuracy: 0.9573
-Epoch 22/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.0983 - accuracy: 0.9610 - val_loss: 0.1023 - val_accuracy: 0.9633
-Epoch 23/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.0776 - accuracy: 0.9694 - val_loss: 0.1176 - val_accuracy: 0.9530
-Epoch 38/50
-586/586 [==============================] - 80s 136ms/step - loss: 0.0596 - accuracy: 0.9768 - val_loss: 0.0967 - val_accuracy: 0.9633
-Epoch 44/50
-586/586 [==============================] - 80s 136ms/step - loss: 0.0504 - accuracy: 0.9792 - val_loss: 0.0984 - val_accuracy: 0.9663
-Epoch 50/50
-586/586 [==============================] - 80s 137ms/step - loss: 0.0486 - accuracy: 0.9817 - val_loss: 0.1157 - val_accuracy: 0.9609
+# Selects the 'validation' dataset.
+dataset = flowers.get_split('validation', DATA_DIR)
 
-<tensorflow.python.keras.callbacks.History at 0x7f1694135320>
-We get to ~96% validation accuracy after training for 50 epochs on the full dataset.
+# Creates a TF-Slim DataProvider which reads the dataset in the background
+# during both training and testing.
+provider = slim.dataset_data_provider.DatasetDataProvider(dataset)
+[image, label] = provider.get(['image', 'label'])
+An automated script for processing ImageNet data.
+Training a model with the ImageNet dataset is a common request. To facilitate working with the ImageNet dataset, we provide an automated script for downloading and processing the ImageNet dataset into the native TFRecord format.
 
-Run inference on new data
-Note that data augmentation and dropout are inactive at inference time.
+The TFRecord format consists of a set of sharded files where each entry is a serialized tf.Example proto. Each tf.Example proto contains the ImageNet image (JPEG encoded) as well as metadata such as label and bounding box information.
 
-img = keras.preprocessing.image.load_img(
-    "PetImages/Cat/6779.jpg", target_size=image_size
-)
-img_array = keras.preprocessing.image.img_to_array(img)
-img_array = tf.expand_dims(img_array, 0)  # Create batch axis
+We provide a single script for downloading and converting ImageNet data to TFRecord format. Downloading and preprocessing the data may take several hours (up to half a day) depending on your network and computer speed. Please be patient.
 
-predictions = model.predict(img_array)
-score = predictions[0]
-print(
-    "This image is %.2f percent cat and %.2f percent dog."
-    % (100 * (1 - score), 100 * score)
-)
-This image is 84.34 percent cat and 15.66 percent dog.
+To begin, you will need to sign up for an account with [ImageNet] (http://image-net.org) to gain access to the data. Look for the sign up page, create an account and request an access key to download the data.
+
+After you have USERNAME and PASSWORD, you are ready to run our script. Make sure that your hard disk has at least 500 GB of free space for downloading and storing the data. Here we select DATA_DIR=$HOME/imagenet-data as such a location but feel free to edit accordingly.
+
+When you run the below script, please enter USERNAME and PASSWORD when prompted. This will occur at the very beginning. Once these values are entered, you will not need to interact with the script again.
+
+# location of where to place the ImageNet data
+DATA_DIR=$HOME/imagenet-data
+
+# build the preprocessing script.
+bazel build slim/download_and_convert_imagenet
+
+# run it
+bazel-bin/slim/download_and_convert_imagenet "${DATA_DIR}"
+The final line of the output script should read:
+
+2016-02-17 14:30:17.287989: Finished writing all 1281167 images in data set.
+When the script finishes you will find 1024 and 128 training and validation files in the DATA_DIR. The files will match the patterns train-????-of-1024 and validation-?????-of-00128, respectively.
+
+Congratulations! You are now ready to train or evaluate with the ImageNet data set.
+
+Pre-trained Models
+
+Neural nets work best when they have many parameters, making them powerful function approximators. However, this means they must be trained on very large datasets. Because training models from scratch can be a very computationally intensive process requiring days or even weeks, we provide various pre-trained models, as listed below. These CNNs have been trained on the ILSVRC-2012-CLS image classification dataset.
+
+In the table below, we list each model, the corresponding TensorFlow model file, the link to the model checkpoint, and the top 1 and top 5 accuracy (on the imagenet test set). Note that the VGG and ResNet V1 parameters have been converted from their original caffe formats (here and here), whereas the Inception and ResNet V2 parameters have been trained internally at Google. Also be aware that these accuracies were computed by evaluating using a single image crop. Some academic papers report higher accuracy by using multiple crops at multiple scales.
+
+Model	TF-Slim File	Checkpoint	Top-1 Accuracy	Top-5 Accuracy
+Inception V1	Code	inception_v1_2016_08_28.tar.gz	69.8	89.6
+Inception V2	Code	inception_v2_2016_08_28.tar.gz	73.9	91.8
+Inception V3	Code	inception_v3_2016_08_28.tar.gz	78.0	93.9
+Inception V4	Code	inception_v4_2016_09_09.tar.gz	80.2	95.2
+Inception-ResNet-v2	Code	inception_resnet_v2_2016_08_30.tar.gz	80.4	95.3
+ResNet V1 50	Code	resnet_v1_50_2016_08_28.tar.gz	75.2	92.2
+ResNet V1 101	Code	resnet_v1_101_2016_08_28.tar.gz	76.4	92.9
+ResNet V1 152	Code	resnet_v1_152_2016_08_28.tar.gz	76.8	93.2
+ResNet V2 50^	Code	resnet_v2_50_2017_04_14.tar.gz	75.6	92.8
+ResNet V2 101^	Code	resnet_v2_101_2017_04_14.tar.gz	77.0	93.7
+ResNet V2 152^	Code	resnet_v2_152_2017_04_14.tar.gz	77.8	94.1
+ResNet V2 200	Code	TBA	79.9*	95.2*
+VGG 16	Code	vgg_16_2016_08_28.tar.gz	71.5	89.8
+VGG 19	Code	vgg_19_2016_08_28.tar.gz	71.1	89.8
+MobileNet_v1_1.0_224	Code	mobilenet_v1_1.0_224.tgz	70.9	89.9
+MobileNet_v1_0.50_160	Code	mobilenet_v1_0.50_160.tgz	59.1	81.9
+MobileNet_v1_0.25_128	Code	mobilenet_v1_0.25_128.tgz	41.5	66.3
+MobileNet_v2_1.4_224^*	Code	mobilenet_v2_1.4_224.tgz	74.9	92.5
+MobileNet_v2_1.0_224^*	Code	mobilenet_v2_1.0_224.tgz	71.9	91.0
+NASNet-A_Mobile_224#	Code	nasnet-a_mobile_04_10_2017.tar.gz	74.0	91.6
+NASNet-A_Large_331#	Code	nasnet-a_large_04_10_2017.tar.gz	82.7	96.2
+PNASNet-5_Large_331	Code	pnasnet-5_large_2017_12_13.tar.gz	82.9	96.2
+PNASNet-5_Mobile_224	Code	pnasnet-5_mobile_2017_12_13.tar.gz	74.2	91.9
+^ ResNet V2 models use Inception pre-processing and input image size of 299 (use --preprocessing_name inception --eval_image_size 299 when using eval_image_classifier.py). Performance numbers for ResNet V2 models are reported on the ImageNet validation set.
+
+(#) More information and details about the NASNet architectures are available at this README
+
+All 16 float MobileNet V1 models reported in the MobileNet Paper and all 16 quantized TensorFlow Lite compatible MobileNet V1 models can be found here.
+
+(^#) More details on MobileNetV2 models can be found here.
+
+(*): Results quoted from the paper.
+
+Here is an example of how to download the Inception V3 checkpoint:
+
+$ CHECKPOINT_DIR=/tmp/checkpoints
+$ mkdir ${CHECKPOINT_DIR}
+$ wget http://download.tensorflow.org/models/inception_v3_2016_08_28.tar.gz
+$ tar -xvf inception_v3_2016_08_28.tar.gz
+$ mv inception_v3.ckpt ${CHECKPOINT_DIR}
+$ rm inception_v3_2016_08_28.tar.gz
+Training a model from scratch.
+
+We provide an easy way to train a model from scratch using any TF-Slim dataset. The following example demonstrates how to train Inception V3 using the default parameters on the ImageNet dataset.
+
+DATASET_DIR=/tmp/imagenet
+TRAIN_DIR=/tmp/train_logs
+python train_image_classifier.py \
+    --train_dir=${TRAIN_DIR} \
+    --dataset_name=imagenet \
+    --dataset_split_name=train \
+    --dataset_dir=${DATASET_DIR} \
+    --model_name=inception_v3
+This process may take several days, depending on your hardware setup. For convenience, we provide a way to train a model on multiple GPUs, and/or multiple CPUs, either synchrononously or asynchronously. See model_deploy for details.
+
+TensorBoard
+To visualize the losses and other metrics during training, you can use TensorBoard by running the command below.
+
+tensorboard --logdir=${TRAIN_DIR}
+Once TensorBoard is running, navigate your web browser to http://localhost:6006.
+
+Fine-tuning a model from an existing checkpoint
+
+Rather than training from scratch, we'll often want to start from a pre-trained model and fine-tune it. To indicate a checkpoint from which to fine-tune, we'll call training with the --checkpoint_path flag and assign it an absolute path to a checkpoint file.
+
+When fine-tuning a model, we need to be careful about restoring checkpoint weights. In particular, when we fine-tune a model on a new task with a different number of output labels, we wont be able restore the final logits (classifier) layer. For this, we'll use the --checkpoint_exclude_scopes flag. This flag hinders certain variables from being loaded. When fine-tuning on a classification task using a different number of classes than the trained model, the new model will have a final 'logits' layer whose dimensions differ from the pre-trained model. For example, if fine-tuning an ImageNet-trained model on Flowers, the pre-trained logits layer will have dimensions [2048 x 1001] but our new logits layer will have dimensions [2048 x 5]. Consequently, this flag indicates to TF-Slim to avoid loading these weights from the checkpoint.
+
+Keep in mind that warm-starting from a checkpoint affects the model's weights only during the initialization of the model. Once a model has started training, a new checkpoint will be created in ${TRAIN_DIR}. If the fine-tuning training is stopped and restarted, this new checkpoint will be the one from which weights are restored and not the ${checkpoint_path}$. Consequently, the flags --checkpoint_path and --checkpoint_exclude_scopes are only used during the 0-th global step (model initialization). Typically for fine-tuning one only want train a sub-set of layers, so the flag --trainable_scopes allows to specify which subsets of layers should trained, the rest would remain frozen.
+
+Below we give an example of fine-tuning inception-v3 on flowers, inception_v3 was trained on ImageNet with 1000 class labels, but the flowers dataset only have 5 classes. Since the dataset is quite small we will only train the new layers.
+
+$ DATASET_DIR=/tmp/flowers
+$ TRAIN_DIR=/tmp/flowers-models/inception_v3
+$ CHECKPOINT_PATH=/tmp/my_checkpoints/inception_v3.ckpt
+$ python train_image_classifier.py \
+    --train_dir=${TRAIN_DIR} \
+    --dataset_dir=${DATASET_DIR} \
+    --dataset_name=flowers \
+    --dataset_split_name=train \
+    --model_name=inception_v3 \
+    --checkpoint_path=${CHECKPOINT_PATH} \
+    --checkpoint_exclude_scopes=InceptionV3/Logits,InceptionV3/AuxLogits \
+    --trainable_scopes=InceptionV3/Logits,InceptionV3/AuxLogits
+Evaluating performance of a model
+
+To evaluate the performance of a model (whether pretrained or your own), you can use the eval_image_classifier.py script, as shown below.
+
+Below we give an example of downloading the pretrained inception model and evaluating it on the imagenet dataset.
+
+CHECKPOINT_FILE = ${CHECKPOINT_DIR}/inception_v3.ckpt  # Example
+$ python eval_image_classifier.py \
+    --alsologtostderr \
+    --checkpoint_path=${CHECKPOINT_FILE} \
+    --dataset_dir=${DATASET_DIR} \
+    --dataset_name=imagenet \
+    --dataset_split_name=validation \
+    --model_name=inception_v3
+See the evaluation module example for an example of how to evaluate a model at multiple checkpoints during or after the training.
+
+Exporting the Inference Graph
+
+Saves out a GraphDef containing the architecture of the model.
+
+To use it with a model name defined by slim, run:
+
+$ python export_inference_graph.py \
+  --alsologtostderr \
+  --model_name=inception_v3 \
+  --output_file=/tmp/inception_v3_inf_graph.pb
+
+$ python export_inference_graph.py \
+  --alsologtostderr \
+  --model_name=mobilenet_v1 \
+  --image_size=224 \
+  --output_file=/tmp/mobilenet_v1_224.pb
+Freezing the exported Graph
+If you then want to use the resulting model with your own or pretrained checkpoints as part of a mobile model, you can run freeze_graph to get a graph def with the variables inlined as constants using:
+
+bazel build tensorflow/python/tools:freeze_graph
+
+bazel-bin/tensorflow/python/tools/freeze_graph \
+  --input_graph=/tmp/inception_v3_inf_graph.pb \
+  --input_checkpoint=/tmp/checkpoints/inception_v3.ckpt \
+  --input_binary=true --output_graph=/tmp/frozen_inception_v3.pb \
+  --output_node_names=InceptionV3/Predictions/Reshape_1
+The output node names will vary depending on the model, but you can inspect and estimate them using the summarize_graph tool:
+
+bazel build tensorflow/tools/graph_transforms:summarize_graph
+
+bazel-bin/tensorflow/tools/graph_transforms/summarize_graph \
+  --in_graph=/tmp/inception_v3_inf_graph.pb
+Run label image in C++
+To run the resulting graph in C++, you can look at the label_image sample code:
+
+bazel build tensorflow/examples/label_image:label_image
+
+bazel-bin/tensorflow/examples/label_image/label_image \
+  --image=${HOME}/Pictures/flowers.jpg \
+  --input_layer=input \
+  --output_layer=InceptionV3/Predictions/Reshape_1 \
+  --graph=/tmp/frozen_inception_v3.pb \
+  --labels=/tmp/imagenet_slim_labels.txt \
+  --input_mean=0 \
+  --input_std=255
+Troubleshooting
+
+The model runs out of CPU memory.
+See Model Runs out of CPU memory.
+
+The model runs out of GPU memory.
+See Adjusting Memory Demands.
+
+The model training results in NaN's.
+See Model Resulting in NaNs.
+
+The ResNet and VGG Models have 1000 classes but the ImageNet dataset has 1001
+The ImageNet dataset provided has an empty background class which can be used to fine-tune the model to other tasks. If you try training or fine-tuning the VGG or ResNet models using the ImageNet dataset, you might encounter the following error:
+
+InvalidArgumentError: Assign requires shapes of both tensors to match. lhs shape= [1001] rhs shape= [1000]
+This is due to the fact that the VGG and ResNet V1 final layers have only 1000 outputs rather than 1001.
+
+To fix this issue, you can set the --labels_offset=1 flag. This results in the ImageNet labels being shifted down by one:
+
+I wish to train a model with a different image size.
+The preprocessing functions all take height and width as parameters. You can change the default values using the following snippet:
+
+image_preprocessing_fn = preprocessing_factory.get_preprocessing(
+    preprocessing_name,
+    height=MY_NEW_HEIGHT,
+    width=MY_NEW_WIDTH,
+    is_training=True)
+What hardware specification are these hyper-parameters targeted for?
+See Hardware Specifications.
